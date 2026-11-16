@@ -1,3 +1,27 @@
+'21':
+  priority: null
+  related_use_cases: []
+  review_notes: 'Primary: WG2 (its own stated primary theme, Runtime Enforcement,
+    matches WG2''s action-time-verdict remit directly -- see its own theme-relevance
+    table). Secondary: WG1 (Continuous Trust and Attestation marked relevant though
+    not primary). Still an actively developing community contribution (64 comments
+    as of 15 Nov, including real executable test code from a second contributor) --
+    not yet independently validated per the submitter''s own closing comment. Recommended
+    as a live discussion item with WG2, not a closed/settled mapping.'
+  review_status: mapped
+  reviewed_at: '2026-11-16 18:38:17'
+  reviewer: Trisha Chakraborty
+  standards_gaps: []
+  summary: Agentic workflows can pass every individual local check while the composed
+    decision is no longer supported at the moment of acting; tests whether reinforced
+    controls survive composition and change. Routed to WG2 for detailed discussion
+    given its action-time-verdict framing.
+  taxonomy_terms: []
+  themes:
+  - Runtime Enforcement (Control Plane)
+  working_groups:
+  - wg1-cdra
+  - wg2-ibea
 '35':
   priority: null
   related_use_cases: []
