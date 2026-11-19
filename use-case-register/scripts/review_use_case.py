@@ -80,13 +80,24 @@ def read_current_entry(conn, issue_number):
 
 
 def notify_working_groups(issue_number, entry, wgs_to_notify):
-    """Make a new WG tagging actually visible to that WG: add its GitHub
-    label on the issue, and post a comment @-mentioning its real contact
-    (GitHub emails mentioned users by default -- this is the notification,
-    not a separate thing to build). Only called for newly-added WG links,
-    never on a re-run of an already-applied tag. Failures here are
-    reported but never abort the review itself -- the curated data is
-    already saved by this point."""
+    """Make a new WG tagging actually visible to that WG.
+
+    Only called for newly-added WG links, never on a re-run of an
+    already-applied tag.
+
+    - The GitHub label is applied automatically: it's plain categorization
+      (matches the WG already recorded for this use case), not a public
+      statement, so it carries the same low stakes as any other label.
+    - The notification COMMENT is never posted automatically. @-mentioning
+      someone is a public statement attributed to this account, so the
+      draft is printed for a human to read and explicitly approve first --
+      see docs/reviewer-workflow.md, "Notifying the tagged Working Group."
+      Posting it means actually running the `gh issue comment` command
+      printed below, as its own deliberate step -- never a side effect of
+      tagging.
+
+    Label-apply failures are reported but never abort the review itself --
+    the curated data is already saved by this point."""
     if not wgs_to_notify:
         return
     load_env()
@@ -100,10 +111,12 @@ def notify_working_groups(issue_number, entry, wgs_to_notify):
         )
         if result.returncode != 0:
             print(f"warning: could not add label(s) {labels}: {result.stderr.strip()}", file=sys.stderr)
+        else:
+            print(f"applied label(s) {labels} to issue #{issue_number}")
 
     mentions = sorted({f"@{contact}" for (_, _, contact) in wgs_to_notify if contact})
     if not mentions:
-        print("warning: no github_contact on record for the newly-tagged WG(s) — no notification comment posted", file=sys.stderr)
+        print("warning: no github_contact on record for the newly-tagged WG(s) — no comment drafted", file=sys.stderr)
         return
 
     body_lines = [
@@ -115,15 +128,15 @@ def notify_working_groups(issue_number, entry, wgs_to_notify):
     if entry.get("review_notes"):
         body_lines += ["", f"**Notes:** {entry['review_notes']}"]
     body_lines += ["", f"**Working groups tagged:** {', '.join(entry.get('working_groups') or [])}"]
+    body = "\n".join(body_lines)
 
-    result = subprocess.run(
-        ["gh", "issue", "comment", str(issue_number), "-R", repo, "--body", "\n".join(body_lines)],
-        capture_output=True, text=True,
+    print(
+        "\n--- Draft notification comment (NOT posted — review before sending) ---\n"
+        f"{body}\n"
+        "--- end draft ---\n"
+        "To post it after review, run:\n"
+        f'  gh issue comment {issue_number} -R {repo} --body-file <(cat <<\'EOF\'\n{body}\nEOF\n)'
     )
-    if result.returncode != 0:
-        print(f"warning: could not post notification comment: {result.stderr.strip()}", file=sys.stderr)
-    else:
-        print(f"notified {', '.join(mentions)} on issue #{issue_number}")
 
 
 def main():
