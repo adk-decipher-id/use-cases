@@ -19,6 +19,9 @@
   taxonomy_terms: []
   themes:
   - Runtime Enforcement (Control Plane)
+  working_group_roles:
+    wg1-cdra: secondary
+    wg2-ibea: primary
   working_groups:
   - wg1-cdra
   - wg2-ibea
@@ -39,6 +42,9 @@
   taxonomy_terms: []
   themes:
   - Continuous Trust and Attestation
+  working_group_roles:
+    wg1-cdra: primary
+    wg2-ibea: secondary
   working_groups:
   - wg1-cdra
   - wg2-ibea
