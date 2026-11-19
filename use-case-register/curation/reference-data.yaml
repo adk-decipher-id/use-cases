@@ -11,8 +11,12 @@ working_groups:
     name: Use Cases and Terminology
   - slug: wg1-cdra
     name: Continuous and Dynamic Remote Attestation for Agentic AI
+    github_label: wg1-cdra
+    github_contact: henkbirkholz  # theme proposer; charter lists chair as TBD
   - slug: wg2-ibea
     name: Identity, Behaviour and Enforcement for AI Agents
+    github_label: wg2-ibea
+    github_contact: cgorlla  # confirmed WG2 co-chair
 
 # Themes as enumerated in the use-case issue template's "Theme relevance"
 # section (.github/ISSUE_TEMPLATE/fg-tida-use-case-proposal.md). Seeded

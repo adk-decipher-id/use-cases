@@ -22,11 +22,13 @@ Examples:
 """
 
 import argparse
+import os
 import sqlite3
+import subprocess
 import sys
 
 import _curation as curation
-from _env import db_path
+from _env import db_path, load_env
 
 REVIEW_STATUSES = {"new", "needs_review", "mapped", "wg_input", "parked", "closed"}
 
@@ -75,6 +77,53 @@ def read_current_entry(conn, issue_number):
         (use_case_id, use_case_id, use_case_id)).fetchall()]
 
     return entry
+
+
+def notify_working_groups(issue_number, entry, wgs_to_notify):
+    """Make a new WG tagging actually visible to that WG: add its GitHub
+    label on the issue, and post a comment @-mentioning its real contact
+    (GitHub emails mentioned users by default -- this is the notification,
+    not a separate thing to build). Only called for newly-added WG links,
+    never on a re-run of an already-applied tag. Failures here are
+    reported but never abort the review itself -- the curated data is
+    already saved by this point."""
+    if not wgs_to_notify:
+        return
+    load_env()
+    repo = os.environ.get("GITHUB_REPO", "fg-tida-wg0/use-cases")
+
+    labels = sorted({label for (_, label, _) in wgs_to_notify if label})
+    if labels:
+        result = subprocess.run(
+            ["gh", "issue", "edit", str(issue_number), "-R", repo, "--add-label", ",".join(labels)],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            print(f"warning: could not add label(s) {labels}: {result.stderr.strip()}", file=sys.stderr)
+
+    mentions = sorted({f"@{contact}" for (_, _, contact) in wgs_to_notify if contact})
+    if not mentions:
+        print("warning: no github_contact on record for the newly-tagged WG(s) — no notification comment posted", file=sys.stderr)
+        return
+
+    body_lines = [
+        f"{' '.join(mentions)} — this use case has just been tagged to your Working Group "
+        "in the WG0 use-case register.",
+        "",
+        f"**Summary:** {entry.get('summary') or '(no summary recorded)'}",
+    ]
+    if entry.get("review_notes"):
+        body_lines += ["", f"**Notes:** {entry['review_notes']}"]
+    body_lines += ["", f"**Working groups tagged:** {', '.join(entry.get('working_groups') or [])}"]
+
+    result = subprocess.run(
+        ["gh", "issue", "comment", str(issue_number), "-R", repo, "--body", "\n".join(body_lines)],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        print(f"warning: could not post notification comment: {result.stderr.strip()}", file=sys.stderr)
+    else:
+        print(f"notified {', '.join(mentions)} on issue #{issue_number}")
 
 
 def main():
@@ -149,9 +198,13 @@ def main():
     for theme in args.add_theme:
         curation.apply_theme_link(conn, use_case_id, theme)
 
+    wgs_to_notify = []
     for wg_slug in args.add_wg:
-        if not curation.apply_working_group_link(conn, use_case_id, wg_slug):
-            sys.exit(f"unknown working group slug '{wg_slug}' — add it to schema/002_seed_reference_data.sql first")
+        result = curation.apply_working_group_link(conn, use_case_id, wg_slug)
+        if result is None:
+            sys.exit(f"unknown working group slug '{wg_slug}' — add it to curation/reference-data.yaml first")
+        if result["is_new"]:
+            wgs_to_notify.append((wg_slug, result["github_label"], result["github_contact"]))
 
     for term in args.add_taxonomy_term:
         curation.apply_taxonomy_link(conn, use_case_id, term)
@@ -166,11 +219,15 @@ def main():
     conn.commit()
 
     mappings = curation.load_mappings()
-    mappings[str(args.issue)] = read_current_entry(conn, args.issue)
+    entry = read_current_entry(conn, args.issue)
+    mappings[str(args.issue)] = entry
     curation.save_mappings(mappings)
 
     conn.close()
     print(f"updated issue #{args.issue} (curation/mappings.yaml written — remember to commit it)")
+
+    notify_working_groups(args.issue, entry, wgs_to_notify)
+
     return 0
 
 

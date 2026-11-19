@@ -46,7 +46,7 @@ python scripts/review_use_case.py --issue 12 \
     --summary "Cross-border delegation of a payment mandate" \
     --reviewer alice \
     --add-theme Delegation --add-theme "Discovery and Cross-Border Trust" \
-    --add-wg wg1-ra-aai \
+    --add-wg wg1-cdra \
     --add-taxonomy-term mandate \
     --add-standards-gap "No standard for cross-border mandate revocation propagation" \
     --related-to 7
@@ -57,6 +57,28 @@ exist — new themes/terms are expected to emerge from real use cases.
 `--add-wg` requires the working group to already exist in `working_groups`
 (add it to `curation/reference-data.yaml` when FG-TIDA forms a new one, then
 run `scripts/load_reference_data.py`).
+
+### Notifying the tagged Working Group
+
+Tagging a use case to a WG with `--add-wg` only changes WG0's own data unless
+the WG actually finds out — a label buried in a committed YAML file isn't
+visible to anyone who isn't already looking for it. So the first time a
+use case is linked to a given WG (never on a re-run of the same command),
+the CLI automatically:
+
+1. Adds that WG's GitHub label (e.g. `wg1-cdra`) to the issue itself, so
+   it's a plain, bookmarkable GitHub search for anyone — `is:issue
+   label:wg1-cdra` in `fg-tida-wg0/use-cases`.
+2. Posts a comment on the issue that @-mentions that WG's recorded
+   `github_contact` (from `curation/reference-data.yaml`). GitHub emails
+   @-mentioned users by default, so this is the actual notification, not
+   just a label.
+
+Both depend on `github_label`/`github_contact` being set for that WG in
+`curation/reference-data.yaml`; a WG with neither set gets a warning printed
+instead of a silent no-op. Requires `gh` to be authenticated with comment/
+label write access to the use-cases repo; a failure here is reported but
+never blocks the curated data from being saved.
 
 ## After running the CLI
 

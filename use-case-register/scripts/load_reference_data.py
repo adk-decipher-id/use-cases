@@ -28,8 +28,13 @@ def main():
 
     for wg in data.get("working_groups", []):
         conn.execute(
-            "INSERT OR IGNORE INTO working_groups (slug, name, description) VALUES (?, ?, ?)",
-            (wg["slug"], wg["name"], wg.get("description")),
+            """INSERT OR IGNORE INTO working_groups
+               (slug, name, description, github_label, github_contact)
+               VALUES (?, ?, ?, ?, ?)""",
+            (
+                wg["slug"], wg["name"], wg.get("description"),
+                wg.get("github_label"), wg.get("github_contact"),
+            ),
         )
 
     for theme in data.get("themes", []):

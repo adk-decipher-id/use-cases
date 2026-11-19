@@ -62,12 +62,31 @@ def get_use_case_id(conn, issue_number):
 
 
 def apply_working_group_link(conn, use_case_id, wg_slug):
-    """Returns False (and links nothing) if the slug is unknown."""
-    row = conn.execute("SELECT id FROM working_groups WHERE slug = ?", (wg_slug,)).fetchone()
+    """Links the use case to the named Working Group.
+
+    Returns None if the slug is unknown (nothing linked). Otherwise returns
+    a dict: {"is_new": bool, "github_label": str|None, "github_contact":
+    str|None}. is_new is False when the link already existed (e.g. a
+    reviewer re-running the same command) -- callers use this to avoid
+    re-posting a GitHub notification comment on every re-run.
+    """
+    row = conn.execute(
+        "SELECT id, github_label, github_contact FROM working_groups WHERE slug = ?",
+        (wg_slug,),
+    ).fetchone()
     if row is None:
-        return False
-    link(conn, "use_case_working_group_links", "use_case_id", "working_group_id", use_case_id, row[0])
-    return True
+        return None
+    wg_id, github_label, github_contact = row
+    cur = conn.execute(
+        """INSERT OR IGNORE INTO use_case_working_group_links
+           (use_case_id, working_group_id) VALUES (?, ?)""",
+        (use_case_id, wg_id),
+    )
+    return {
+        "is_new": cur.rowcount > 0,
+        "github_label": github_label,
+        "github_contact": github_contact,
+    }
 
 
 def apply_theme_link(conn, use_case_id, theme_name):
