@@ -46,7 +46,7 @@ python scripts/review_use_case.py --issue 12 \
     --summary "Cross-border delegation of a payment mandate" \
     --reviewer alice \
     --add-theme Delegation --add-theme "Discovery and Cross-Border Trust" \
-    --add-wg wg1-cdra \
+    --add-wg wg1-cdra:primary --add-wg wg2-ibea:secondary \
     --add-taxonomy-term mandate \
     --add-standards-gap "No standard for cross-border mandate revocation propagation" \
     --related-to 7
@@ -57,6 +57,24 @@ exist — new themes/terms are expected to emerge from real use cases.
 `--add-wg` requires the working group to already exist in `working_groups`
 (add it to `curation/reference-data.yaml` when FG-TIDA forms a new one, then
 run `scripts/load_reference_data.py`).
+
+#### Primary vs. secondary
+
+`--add-wg` takes an optional `:primary` or `:secondary` suffix (e.g.
+`wg1-cdra:primary`). This generalizes to any number of Working Groups —
+nothing about it is specific to WG1 or WG2, so a future WG3/WG4 needs no
+code changes, just an entry in `curation/reference-data.yaml`.
+
+- **At most one WG can be primary per use case.** The CLI refuses a second
+  primary in the same command, and refuses adding a new primary while a
+  different one is already recorded — demote the existing one explicitly
+  first (`--add-wg <existing-slug>:secondary`).
+- Omitting the role (`--add-wg wg1-cdra`, no suffix) never erases a role
+  set earlier — only an explicit `:primary`/`:secondary` ever changes one.
+- If a use case is tagged first with no role and given one later, the
+  GitHub label is kept in sync either way (the earlier, unsuffixed label
+  is removed and replaced) — this isn't limited to the moment of first
+  tagging.
 
 ### Notifying the tagged Working Group
 

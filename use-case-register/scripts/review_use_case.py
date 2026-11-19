@@ -14,7 +14,8 @@ Examples:
   python scripts/review_use_case.py --list-unreviewed
   python scripts/review_use_case.py --issue 12 --status mapped \\
       --summary "Cross-border delegation of a payment mandate" \\
-      --reviewer alice --add-theme Delegation --add-wg wg1-ra-aai
+      --reviewer alice --add-theme Delegation \\
+      --add-wg wg1-cdra:primary --add-wg wg2-ibea:secondary
   python scripts/review_use_case.py --issue 12 --add-taxonomy-term "mandate"
   python scripts/review_use_case.py --issue 12 --add-standards-gap \\
       "No standard for cross-border mandate revocation propagation"
@@ -60,9 +61,12 @@ def read_current_entry(conn, issue_number):
     entry["themes"] = [r[0] for r in conn.execute(
         """SELECT t.name FROM use_case_theme_links l JOIN themes t ON t.id = l.theme_id
            WHERE l.use_case_id = ? ORDER BY t.name""", (use_case_id,)).fetchall()]
-    entry["working_groups"] = [r[0] for r in conn.execute(
-        """SELECT w.slug FROM use_case_working_group_links l JOIN working_groups w ON w.id = l.working_group_id
-           WHERE l.use_case_id = ? ORDER BY w.slug""", (use_case_id,)).fetchall()]
+    wg_rows = conn.execute(
+        """SELECT w.slug, l.role FROM use_case_working_group_links l
+           JOIN working_groups w ON w.id = l.working_group_id
+           WHERE l.use_case_id = ? ORDER BY w.slug""", (use_case_id,)).fetchall()
+    entry["working_groups"] = [slug for slug, _role in wg_rows]
+    entry["working_group_roles"] = {slug: role for slug, role in wg_rows if role is not None}
     entry["taxonomy_terms"] = [r[0] for r in conn.execute(
         """SELECT x.term FROM use_case_taxonomy_links l JOIN taxonomy_terms x ON x.id = l.taxonomy_term_id
            WHERE l.use_case_id = ? ORDER BY x.term""", (use_case_id,)).fetchall()]
@@ -79,40 +83,64 @@ def read_current_entry(conn, issue_number):
     return entry
 
 
-def notify_working_groups(issue_number, entry, wgs_to_notify):
-    """Make a new WG tagging actually visible to that WG.
+def sync_wg_labels(issue_number, label_syncs):
+    """Apply role-qualified WG labels (e.g. 'wg1-cdra:primary') on GitHub so
+    they match the register's current state. Pure categorization, not a
+    public statement, so this runs automatically with no review step --
+    unlike the notification comment (see draft_wg_notifications below).
 
-    Only called for newly-added WG links, never on a re-run of an
-    already-applied tag.
+    label_syncs: list of (old_label_to_remove_or_None, new_label_to_add).
+    Called for every --add-wg processed, not just newly-added links, since
+    a role can change on a WG that was already linked (tagged with no role
+    first, given one later) -- the label needs to track that too.
 
-    - The GitHub label is applied automatically: it's plain categorization
-      (matches the WG already recorded for this use case), not a public
-      statement, so it carries the same low stakes as any other label.
-    - The notification COMMENT is never posted automatically. @-mentioning
-      someone is a public statement attributed to this account, so the
-      draft is printed for a human to read and explicitly approve first --
-      see docs/reviewer-workflow.md, "Notifying the tagged Working Group."
-      Posting it means actually running the `gh issue comment` command
-      printed below, as its own deliberate step -- never a side effect of
-      tagging.
-
-    Label-apply failures are reported but never abort the review itself --
-    the curated data is already saved by this point."""
-    if not wgs_to_notify:
+    Failures are reported but never abort the review -- the curated data
+    is already saved by this point."""
+    if not label_syncs:
         return
     load_env()
     repo = os.environ.get("GITHUB_REPO", "fg-tida-wg0/use-cases")
 
-    labels = sorted({label for (_, label, _) in wgs_to_notify if label})
-    if labels:
+    to_add = sorted({new for _old, new in label_syncs if new})
+    to_remove = sorted({old for old, new in label_syncs if old and old != new})
+
+    if to_add:
         result = subprocess.run(
-            ["gh", "issue", "edit", str(issue_number), "-R", repo, "--add-label", ",".join(labels)],
+            ["gh", "issue", "edit", str(issue_number), "-R", repo, "--add-label", ",".join(to_add)],
             capture_output=True, text=True,
         )
         if result.returncode != 0:
-            print(f"warning: could not add label(s) {labels}: {result.stderr.strip()}", file=sys.stderr)
+            print(f"warning: could not add label(s) {to_add}: {result.stderr.strip()}", file=sys.stderr)
         else:
-            print(f"applied label(s) {labels} to issue #{issue_number}")
+            print(f"applied label(s) {to_add} to issue #{issue_number}")
+
+    if to_remove:
+        result = subprocess.run(
+            ["gh", "issue", "edit", str(issue_number), "-R", repo, "--remove-label", ",".join(to_remove)],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            print(f"warning: could not remove stale label(s) {to_remove}: {result.stderr.strip()}", file=sys.stderr)
+        else:
+            print(f"removed stale label(s) {to_remove} from issue #{issue_number} (role changed)")
+
+
+def draft_wg_notifications(issue_number, entry, wgs_to_notify):
+    """Print (never post) a notification comment for each newly-tagged WG.
+
+    Only called for newly-added WG links, never on a re-run or a role
+    change on an already-notified WG -- otherwise every tweak would print
+    another draft for the same people.
+
+    @-mentioning someone is a public statement attributed to this account,
+    so this never posts automatically -- see docs/reviewer-workflow.md,
+    "Notifying the tagged Working Group." Posting means actually running
+    the `gh issue comment` command printed below, as its own deliberate
+    step after a human reviews the wording."""
+    if not wgs_to_notify:
+        return
+    load_env()
+    repo = os.environ.get("GITHUB_REPO", "fg-tida-wg0/use-cases")
 
     mentions = sorted({f"@{contact}" for (_, _, contact) in wgs_to_notify if contact})
     if not mentions:
@@ -148,7 +176,10 @@ def main():
     parser.add_argument("--priority")
     parser.add_argument("--reviewer")
     parser.add_argument("--add-theme", action="append", default=[], metavar="NAME")
-    parser.add_argument("--add-wg", action="append", default=[], metavar="SLUG")
+    parser.add_argument(
+        "--add-wg", action="append", default=[], metavar="SLUG[:primary|:secondary]",
+        help="e.g. --add-wg wg1-cdra:primary; role is optional, and omitting it never erases a role set earlier",
+    )
     parser.add_argument("--add-taxonomy-term", action="append", default=[], metavar="TERM")
     parser.add_argument("--add-standards-gap", action="append", default=[], metavar="TITLE")
     parser.add_argument("--related-to", type=int, metavar="ISSUE_NUMBER")
@@ -211,13 +242,47 @@ def main():
     for theme in args.add_theme:
         curation.apply_theme_link(conn, use_case_id, theme)
 
-    wgs_to_notify = []
-    for wg_slug in args.add_wg:
-        result = curation.apply_working_group_link(conn, use_case_id, wg_slug)
+    parsed_add_wg = []
+    for raw in args.add_wg:
+        wg_slug, sep, role = raw.partition(":")
+        role = role or None
+        if role not in (None, "primary", "secondary"):
+            sys.exit(f"invalid role '{role}' in --add-wg {raw!r} — must be ':primary', ':secondary', or omitted")
+        parsed_add_wg.append((wg_slug, role))
+
+    new_primaries = [slug for slug, role in parsed_add_wg if role == "primary"]
+    if len(new_primaries) > 1:
+        sys.exit(f"at most one WG can be primary per use case — got multiple in this command: {new_primaries}")
+    if new_primaries:
+        existing_primary = curation.get_primary_wg_slug(conn, use_case_id)
+        if existing_primary and existing_primary not in new_primaries:
+            sys.exit(
+                f"use case #{args.issue} already has primary WG '{existing_primary}' — "
+                f"demote it explicitly (--add-wg {existing_primary}:secondary) before adding a new primary"
+            )
+
+    def labelled(github_label, role):
+        if not github_label:
+            return None
+        return f"{github_label}:{role}" if role else github_label
+
+    label_syncs = []    # (old_label_to_remove|None, new_label_to_add)
+    wgs_to_notify = []  # subset of the above that also needs a fresh notification draft
+    for wg_slug, role in parsed_add_wg:
+        result = curation.apply_working_group_link(conn, use_case_id, wg_slug, role=role)
         if result is None:
             sys.exit(f"unknown working group slug '{wg_slug}' — add it to curation/reference-data.yaml first")
+
+        old_label = labelled(result["github_label"], result["previous_role"])
+        new_label = labelled(result["github_label"], result["role"])
+        # is_new always needs a sync even if old_label == new_label (e.g.
+        # tagged with no role both "before" and "after" -- there was no
+        # real previous label on GitHub to compare against, since this is
+        # the first time).
+        if result["is_new"] or old_label != new_label:
+            label_syncs.append((old_label if not result["is_new"] else None, new_label))
         if result["is_new"]:
-            wgs_to_notify.append((wg_slug, result["github_label"], result["github_contact"]))
+            wgs_to_notify.append((wg_slug, new_label, result["github_contact"]))
 
     for term in args.add_taxonomy_term:
         curation.apply_taxonomy_link(conn, use_case_id, term)
@@ -239,7 +304,8 @@ def main():
     conn.close()
     print(f"updated issue #{args.issue} (curation/mappings.yaml written — remember to commit it)")
 
-    notify_working_groups(args.issue, entry, wgs_to_notify)
+    sync_wg_labels(args.issue, label_syncs)
+    draft_wg_notifications(args.issue, entry, wgs_to_notify)
 
     return 0
 

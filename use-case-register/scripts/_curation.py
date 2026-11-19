@@ -18,8 +18,8 @@ CURATED_FIELDS = [
     "reviewer", "reviewed_at",
 ]
 LINK_FIELDS = [
-    "themes", "working_groups", "taxonomy_terms", "standards_gaps",
-    "related_use_cases",
+    "themes", "working_groups", "working_group_roles", "taxonomy_terms",
+    "standards_gaps", "related_use_cases",
 ]
 
 
@@ -61,14 +61,30 @@ def get_use_case_id(conn, issue_number):
     return row[0] if row else None
 
 
-def apply_working_group_link(conn, use_case_id, wg_slug):
-    """Links the use case to the named Working Group.
+def apply_working_group_link(conn, use_case_id, wg_slug, role=None):
+    """Links the use case to the named Working Group, with an optional
+    role ('primary' / 'secondary' / None -- enforced by the schema's CHECK
+    constraint, not re-validated here).
 
     Returns None if the slug is unknown (nothing linked). Otherwise returns
-    a dict: {"is_new": bool, "github_label": str|None, "github_contact":
-    str|None}. is_new is False when the link already existed (e.g. a
-    reviewer re-running the same command) -- callers use this to avoid
-    re-posting a GitHub notification comment on every re-run.
+    a dict:
+      is_new          -- False if this use case/WG pair was already linked
+                         before this call (e.g. a reviewer re-running the
+                         same command). Callers use this to avoid
+                         re-drafting a GitHub notification for a WG
+                         already notified once.
+      previous_role   -- the role stored before this call (None if there
+                         was none, or if is_new).
+      role            -- the role stored AFTER this call -- passing
+                         role=None never erases a role set earlier
+                         (COALESCE on conflict), so this can differ from
+                         the role argument actually passed in.
+      github_label / github_contact -- as recorded on the WG itself.
+
+    Callers should compare previous_role to role to decide whether a
+    GitHub label needs updating, independently of is_new -- a role can
+    change on a WG that was already linked (e.g. tagged with no role
+    first, given one later).
     """
     row = conn.execute(
         "SELECT id, github_label, github_contact FROM working_groups WHERE slug = ?",
@@ -77,16 +93,45 @@ def apply_working_group_link(conn, use_case_id, wg_slug):
     if row is None:
         return None
     wg_id, github_label, github_contact = row
-    cur = conn.execute(
-        """INSERT OR IGNORE INTO use_case_working_group_links
-           (use_case_id, working_group_id) VALUES (?, ?)""",
+
+    existing = conn.execute(
+        """SELECT role FROM use_case_working_group_links
+           WHERE use_case_id = ? AND working_group_id = ?""",
         (use_case_id, wg_id),
+    ).fetchone()
+    is_new = existing is None
+    previous_role = existing[0] if existing else None
+
+    # COALESCE on conflict: passing role=None never erases an existing
+    # role (e.g. a reviewer re-running the same command without retyping
+    # ':primary') -- only an explicit role value ever overwrites one.
+    conn.execute(
+        """INSERT INTO use_case_working_group_links (use_case_id, working_group_id, role)
+           VALUES (?, ?, ?)
+           ON CONFLICT (use_case_id, working_group_id)
+           DO UPDATE SET role = COALESCE(excluded.role, use_case_working_group_links.role)""",
+        (use_case_id, wg_id, role),
     )
+    final_role = role if role is not None else previous_role
     return {
-        "is_new": cur.rowcount > 0,
+        "is_new": is_new,
+        "previous_role": previous_role,
+        "role": final_role,
         "github_label": github_label,
         "github_contact": github_contact,
     }
+
+
+def get_primary_wg_slug(conn, use_case_id):
+    """The slug of the use case's current primary WG, if any (at most one
+    is ever expected -- enforced by the CLI, not the schema)."""
+    row = conn.execute(
+        """SELECT w.slug FROM use_case_working_group_links l
+           JOIN working_groups w ON w.id = l.working_group_id
+           WHERE l.use_case_id = ? AND l.role = 'primary'""",
+        (use_case_id,),
+    ).fetchone()
+    return row[0] if row else None
 
 
 def apply_theme_link(conn, use_case_id, theme_name):
@@ -136,8 +181,9 @@ def apply_entry(conn, issue_number, entry):
 
     for theme in entry.get("themes") or []:
         apply_theme_link(conn, use_case_id, theme)
+    roles = entry.get("working_group_roles") or {}
     for wg_slug in entry.get("working_groups") or []:
-        apply_working_group_link(conn, use_case_id, wg_slug)
+        apply_working_group_link(conn, use_case_id, wg_slug, role=roles.get(wg_slug))
     for term in entry.get("taxonomy_terms") or []:
         apply_taxonomy_link(conn, use_case_id, term)
     for gap in entry.get("standards_gaps") or []:
